@@ -4,7 +4,7 @@
 ## Table of Contents
 1. [What are Native Components?](#what-are-native-components)
 2. [Component Mapping Table](#component-mapping-table)
-3. [The <View> Component](#the-view-component)
+3. [The View Component](#the-view-component)
 4. [Best Practices & Tips](#best-practices--tips)
 5. [References & Further Reading](#references--further-reading)
 
