@@ -238,3 +238,121 @@ This design allows developers to:
 - Transform or normalize data during construction
 - Maintain the immutability guarantee while providing flexibility
 - Keep the code concise and readable
+
+---
+## Adding Instance and Static Methods
+
+Records are not just passive data containers; they can contain business logic relevant to their components. It's possible to add any number of instance methods and static methods to a record, just as in a regular Java class.
+
+**Instance Methods:** Allow adding behavior that operates on the record's data.
+
+```java
+record Point(double x, double y) {
+    public double distance(Point q) { // Instance method
+        return Math.sqrt(Math.pow(x - q.x, 2) + Math.pow(y - q.y, 2));
+    }
+}
+```
+
+Additionally, it's possible to provide custom implementations for automatically generated methods (toString, equals, hashCode) if the default behavior is not suitable for a specific use case.
+
+```java
+record Point(double x, double y) {
+    @Override
+    public String toString() {
+        return "(" + x + ", " + y + ")"; // Custom toString implementation
+    }
+}
+```
+
+**Static Methods and Static Fields:** Records can declare static fields and methods, which belong to the record class itself, not to a specific instance.
+
+```java
+record Point(double x, double y) {
+    public static final Point ORIGIN = new Point(0, 0); // Static field
+    
+    public static double calculateDistance(Point p1, Point p2) { // Static method
+        return p1.distance(p2);
+    }
+}
+```
+
+---
+
+## Interface Implementation and Generic Records
+
+Despite their inheritance restrictions (discussed in the Limitations section), records are flexible enough to implement interfaces and be generic, allowing them to participate in type hierarchies and polymorphic designs.
+
+**Interface Implementation:** A record can implement one or more interfaces, just like a regular class. This is useful for defining behavioral contracts that records must follow.
+
+```java
+record Customer(String id, String name) implements Billable {}
+
+record Point(double x, double y) implements Comparable<Point> {
+    @Override
+    public int compareTo(Point other) {
+        int dx = Double.compare(x, other.x);
+        return dx != 0 ? dx : Double.compare(y, other.y);
+    }
+}
+```
+
+The ability to implement interfaces allows records to integrate seamlessly into frameworks and APIs that depend on polymorphism, without sacrificing the conciseness and immutability they offer. This means that records are not merely "data bags," but can act as complete data types that participate in behaviors defined by contracts.
+
+**Generic Records:** Records can be parameterized by types, making them "generic records." This allows them to work with different data types safely and reusably.
+
+```java
+record Box<T>(T content) {}
+record Pair<K, V>(K key, V value) {}
+```
+
+Additionally, annotations on record components can be propagated to the generated fields and constructors, depending on the @Target of the annotation. This enables the use of validation annotations or persistence framework annotations directly in the concise record declaration.
+
+---
+
+## Data Validation in Records
+
+Data validation is a critical aspect in building robust systems. In records, input data validation is ideally performed within the compact canonical constructor. Since the compact constructor body executes before parameter values are assigned to the record's final fields, it offers a perfect control point to ensure data integrity at the moment of object creation. If validation fails, the constructor can throw an exception, preventing the creation of an invalid record instance.
+
+**Example of Validation and Normalization:**
+
+```java
+record PositiveNumber(int value) {
+    public PositiveNumber { // Compact canonical constructor
+        if (value <= 0) {
+            throw new IllegalArgumentException("Value must be positive");
+        }
+    }
+}
+
+record PolarPoint(double r, double theta) {
+    public PolarPoint { // Angle normalization
+        theta = Math.IEEEremainder(theta, 2 * Math.PI);
+        if (theta < 0) theta += 2 * Math.PI;
+    }
+}
+```
+
+This validation capability in the constructor ensures that any created record instance is valid from the start, reinforcing immutability and data reliability. It's a direct benefit of the compact constructor design, which allows data transformation and verification before final assignment.
+
+---
+
+## Limitations and Restrictions of Records
+
+Despite their advantages, records have certain limitations and design restrictions that are intrinsic to their nature and purpose. Understanding these restrictions is crucial for deciding when to use records and when to opt for traditional classes.
+
+### Immutability and the final Nature of Fields
+
+Immutability is a fundamental characteristic of records. All fields of a record are implicitly declared as `private final`. This means that once a record object is created and its components are initialized through the canonical constructor, their values cannot be changed. The `final` nature of fields is a guarantee that the record's state remains constant throughout its lifetime. This restriction is one of the main reasons for the conciseness and thread safety that records offer, as it eliminates the need for concerns about unexpected state modifications.
+
+### Absence of Explicit Inheritance (Implicitly final)
+
+Records are implicitly `final` and therefore cannot be extended by other classes or records. Similarly, a record cannot extend any other class, not even another record. This restriction stems from the fact that all records implicitly extend the abstract class `java.lang.Record`. Since Java doesn't support multiple inheritance, a record cannot inherit from another class.
+
+Although records don't support the traditional inheritance model, they can participate in type hierarchies in a controlled manner through the use of the `sealed` keyword. This allows a record to declare a limited set of permitted subtypes, offering a form of restricted polymorphism without the complexity of traditional inheritance. This approach is an alternative to the inheritance model, providing a mechanism to control extensibility in a more explicit and safe way.
+
+### Restrictions on Declaring Additional Instance Fields
+
+The "data carrier" nature of records implies that their state is completely determined by the components declared in the header. Consequently, records cannot have any other instance variables besides the "record components". This means it's not possible to add instance fields that are not part of the canonical constructor's component list. This restriction ensures that the record's structure is transparent and that its state is always obvious from its declaration.
+
+---
