@@ -534,3 +534,426 @@ static void nestedBox(Box<Box<String>> bo) {
 ```
 
 Record Patterns significantly enhance pattern matching capabilities in Java, making code more declarative and readable for handling complex data structures. This is a major evolution in the language's expressiveness, allowing more idiomatic and efficient code for data processing.
+
+---
+# 7. How Records Work Behind the Scenes
+
+## 7.1 Class java.lang.Record: Abstract Superclass
+
+All record classes, regardless of their declaration, implicitly extend `java.lang.Record`. This class serves as the base for all record implementations, establishing a fundamental contract for all record types. It is a subclass of `java.lang.Object`, and `java.lang.Record` has no instance state of its own.
+
+The methods `equals()`, `hashCode()`, and `toString()` are declared as abstract in `java.lang.Record`. This means that while the compiler automatically generates concrete implementations of these methods for each specific record, the superclass `java.lang.Record` ensures that all records have these essential functionalities.
+
+An important invariant for all record classes is that if an instance of record R with components c1, c2, ..., cn is copied using:
+
+```java
+R copy = new R(r.c1(), r.c2(), ..., r.cn());
+```
+then `r.equals(copy)` must be true.
+
+---
+# 7.2 Bytecode Structure Generated: Record Attribute and invokedynamic
+
+## Compilation Process and Class Structure
+
+When a `.java` file containing a record is compiled, the compiler generates a `.class` file that is a common final Java class extending `java.lang.Record`. However, the bytecode of a record class contains special information that distinguishes it from a regular class: the **Record attribute**.
+
+## The Record Attribute
+
+The Record attribute is a structure in the attribute table of the `.class` file that stores metadata about the record's components. This structure includes information such as:
+
+- **`components_count`**: The number of components
+- **Array of `record_component_info` structures**: Each `record_component_info` details the name, descriptor (type), and additional attributes of each record component
+
+If a record component has a generic signature different from its erased descriptor, a **Signature attribute** will be present in the `record_component_info` structure.
+
+### Importance of Metadata
+
+This meta-information is crucial for:
+
+- **Reflection**: Allowing `java.lang.Class` to expose methods like `isRecord()` and `getRecordComponents()`
+- **Serialization**: Enabling record-specific serialization behavior
+
+## The invokedynamic Instruction
+
+A fascinating technical detail in the low-level implementation of records is the use of the `invokedynamic` instruction for the `toString()`, `equals()`, and `hashCode()` methods.
+
+### How invokedynamic Works
+
+Instead of generating traditional Java code for these methods directly in the record class bytecode, the compiler uses `invokedynamic`. This instruction allows the JVM to:
+
+- Generate and optimize implementations of these methods **dynamically at runtime**
+- Use a "bootstrap method" to handle the dynamic generation process
+
+### Benefits of invokedynamic Approach
+
+The utilization of `invokedynamic` for `toString()`, `equals()`, and `hashCode()` is a sophisticated optimization that provides several advantages:
+
+#### Performance Benefits
+- **Smaller bytecode**: Reduces the size of generated class files
+- **Faster startup times**: Compared to static code generation, especially for records with many components
+- **Runtime optimization**: The JVM can optimize these methods based on actual usage patterns
+
+---
+# 7.3. Record Serialization and Deserialization Mechanisms
+
+Records can be serialized if they implement the `java.io.Serializable` interface. However, the serialization and deserialization mechanism for records differs significantly from that of common serializable objects.
+
+## Serialization Process
+
+The serialized form of a record object is a sequence of values derived directly from its components. In other words, the record's state is serialized directly from its component fields.
+
+### How Record Serialization Works
+
+```java
+public record Person(String name, int age) implements Serializable {
+    // Serialization will capture: ["John", 25]
+    // Not internal object state, but component values
+}
+```
+
+**Key differences from traditional POJOs:**
+
+- **Component-based**: Only component values are serialized
+- **No hidden state**: Private fields beyond components are ignored
+- **Deterministic**: Serialization order matches component declaration order
+
+## Deserialization Process
+
+During record deserialization, the **canonical constructor** of the record is invoked to reconstruct the object. This is a crucial point for security and integrity.
+
+### Traditional POJO Deserialization Issues
+
+```java
+// Traditional POJO - VULNERABLE
+public class UnsafePOJO implements Serializable {
+    private String name;
+    private int age;
+    
+    public UnsafePOJO(String name, int age) {
+        if (age < 0) throw new IllegalArgumentException("Age cannot be negative");
+        this.name = name;
+        this.age = age;
+    }
+    
+    // During deserialization, constructor is BYPASSED!
+    // Objects can be created with age = -100 (invalid state)
+}
+```
+
+### Record Deserialization - SECURE
+
+```java
+// Record - SECURE
+public record SafePerson(String name, int age) implements Serializable {
+    public SafePerson {
+        if (age < 0) throw new IllegalArgumentException("Age cannot be negative");
+        if (name == null) throw new IllegalArgumentException("Name cannot be null");
+    }
+    
+    // During deserialization, canonical constructor is ALWAYS called
+    // Validation logic is ALWAYS executed
+    // Invalid objects cannot be created through deserialization
+}
+```
+
+## Advanced Serialization Mechanisms
+
+### Custom Serialization Methods
+
+Records can define custom serialization behavior:
+
+```java
+public record AdvancedRecord(String data, int value) implements Serializable {
+    
+    // Custom serialization logic
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        out.defaultWriteObject();
+        out.writeUTF("Custom serialization marker");
+    }
+    
+    // Custom deserialization logic
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        String marker = in.readUTF();
+        if (!"Custom serialization marker".equals(marker)) {
+            throw new InvalidObjectException("Invalid serialization marker");
+        }
+    }
+    
+    // Validation after deserialization
+    private void readObjectNoData() throws ObjectStreamException {
+        throw new InvalidObjectException("Stream data required");
+    }
+}
+```
+
+### Serialization Proxy Pattern with Records
+
+```java
+public record SecureRecord(String sensitiveData, int value) implements Serializable {
+    
+    // Serialization proxy
+    private record SerializationProxy(String data, int val) implements Serializable {
+        // Proxy constructor
+        SerializationProxy(SecureRecord record) {
+            this(record.sensitiveData(), record.value());
+        }
+        
+        // Reconstruct original record
+        private Object readResolve() {
+            return new SecureRecord(data, val);
+        }
+    }
+    
+    // Replace with proxy during serialization
+    private Object writeReplace() {
+        return new SerializationProxy(this);
+    }
+    
+    // Prevent direct deserialization
+    private void readObject(ObjectInputStream stream) throws InvalidObjectException {
+        throw new InvalidObjectException("Proxy required");
+    }
+}
+```
+
+## Security and Integrity Benefits
+
+### 1. Constructor Validation Always Executed
+
+```java
+public record ValidatedRecord(String email, int port) implements Serializable {
+    public ValidatedRecord {
+        if (!email.contains("@")) {
+            throw new IllegalArgumentException("Invalid email format");
+        }
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("Invalid port range");
+        }
+    }
+    
+    // Even during deserialization, these validations CANNOT be bypassed
+}
+```
+
+### 2. Immutability Preservation
+
+```java
+public record ImmutableRecord(List<String> items) implements Serializable {
+    public ImmutableRecord {
+        items = Collections.unmodifiableList(new ArrayList<>(items));
+    }
+    
+    // Deserialization maintains immutability guarantees
+    // No way to create mutable variants through serialization attacks
+}
+```
+
+### 3. Type Safety Guarantees
+
+```java
+public record TypeSafeRecord(UUID id, LocalDateTime timestamp) implements Serializable {
+    public TypeSafeRecord {
+        Objects.requireNonNull(id, "ID cannot be null");
+        Objects.requireNonNull(timestamp, "Timestamp cannot be null");
+    }
+    
+    // Deserialization ensures type safety
+    // No ClassCastException or null pointer vulnerabilities
+}
+```
+
+## Performance Considerations
+
+### Serialization Performance
+
+- **Faster serialization**: Direct component access
+- **Smaller payload**: No unnecessary metadata
+- **Predictable size**: Based on component types
+
+### Deserialization Performance
+
+- **Constructor overhead**: Validation logic runs every time
+- **Memory efficiency**: No duplicate state storage
+- **GC friendly**: Immutable objects reduce GC pressure
+
+## Comparison with Traditional Serialization
+
+|Aspect|Traditional POJOs|Records|
+|---|---|---|
+|**Constructor invocation**|Bypassed|Always called|
+|**Validation**|Skippable|Mandatory|
+|**State consistency**|Vulnerable|Guaranteed|
+|**Immutability**|Not enforced|Preserved|
+|**Security**|Potential vulnerabilities|Inherently secure|
+|**Performance**|Variable|Optimized|
+
+## Best Practices for Record Serialization
+
+### 1. Always Validate in Constructor
+
+```java
+public record UserRecord(String username, String email) implements Serializable {
+    public UserRecord {
+        if (username == null || username.trim().isEmpty()) {
+            throw new IllegalArgumentException("Username cannot be null or empty");
+        }
+        if (email == null || !email.contains("@")) {
+            throw new IllegalArgumentException("Invalid email format");
+        }
+    }
+}
+```
+
+### 2. Handle Sensitive Data Carefully
+
+```java
+public record SecureUserRecord(String username, char[] password) implements Serializable {
+    public SecureUserRecord {
+        username = Objects.requireNonNull(username, "Username cannot be null");
+        password = password.clone(); // Defensive copy
+    }
+    
+    // Custom serialization to handle sensitive data
+    private Object writeReplace() {
+        return new SerializationProxy(username, Arrays.copyOf(password, password.length));
+    }
+}
+```
+
+### 3. Version Control for Evolution
+
+```java
+public record VersionedRecord(String name, int version) implements Serializable {
+    private static final long serialVersionUID = 1L;
+    
+    public VersionedRecord {
+        if (version < 1) {
+            throw new IllegalArgumentException("Version must be positive");
+        }
+    }
+}
+```
+
+---
+
+# 8. Conclusion
+
+Records in Java represent a fundamental evolution in how developers model and interact with data. Introduced to combat the verbosity of traditional POJOs, they offer concise syntax and automatic boilerplate code generation, freeing developers to focus on domain logic.
+
+## Core Benefits and Impact
+
+### Immutability and Thread Safety
+
+The inherent immutability of records, guaranteed by `private final` fields and direct accessor methods, promotes thread safety, state predictability, and system resilience. This aligns Java with modern software design best practices and functional programming principles.
+
+### Beyond Data Containers
+
+The ability to add instance and static methods, implement interfaces, and utilize generics demonstrates that records are more than mere data containers. They are complete data types that can participate in complex behaviors while maintaining their primary role as immutable data carriers.
+
+### Data Integrity and Validation
+
+Validation in the compact canonical constructor ensures data integrity at the point of creation. This is a powerful feature for application robustness, especially when combined with the secure deserialization mechanisms that always invoke constructor validation.
+
+## Advanced Capabilities
+
+### Pattern Matching Integration
+
+While records have restrictions such as the absence of explicit inheritance, the introduction of **Record Patterns in Java 21+** significantly expands their capabilities, making data deconstruction and processing more expressive and efficient.
+
+```java
+// Modern pattern matching with records
+public String processPayment(Payment payment) {
+    return switch (payment) {
+        case CreditCard(String number, String holder, LocalDate expiry) -> 
+            "Processing credit card ending in " + number.substring(number.length() - 4);
+        case PayPal(String email, boolean verified) when verified -> 
+            "Processing verified PayPal account: " + email;
+        case BankTransfer(String iban, String swift) -> 
+            "Processing bank transfer to " + iban;
+        default -> "Unknown payment method";
+    };
+}
+```
+
+### Sophisticated Engineering
+
+Understanding how records work "under the hood" - including the `java.lang.Record` superclass, the Record attribute in bytecode, and the use of `invokedynamic` - reveals the sophisticated engineering behind this functionality, aimed at optimization and compatibility.
+
+## Architectural Applications
+
+### Modern Architecture Patterns
+
+Records are ideally suited for:
+
+- **DTOs (Data Transfer Objects)**: Clean, immutable data transfer
+- **Value Objects**: Domain-driven design patterns
+- **Configuration Objects**: Type-safe configuration management
+- **Event Payloads**: Event-driven architecture components
+- **API Responses**: RESTful service data structures
+
+### Functional Programming Style
+
+Records encourage a more functional and declarative programming style, contributing to cleaner, safer, and more maintainable code. They reduce boilerplate while increasing expressiveness and type safety.
+
+## Performance and Optimization
+
+### JVM-Level Optimizations
+
+- **Compact object layout**: Efficient memory usage
+- **Optimized method dispatch**: `invokedynamic` for generated methods
+- **Reduced garbage collection pressure**: Immutable objects
+- **Better escape analysis**: JVM can optimize immutable objects more effectively
+
+### Developer Productivity
+
+- **Reduced boilerplate**: Less code to write and maintain
+- **Automatic IDE support**: Better tooling integration
+- **Compile-time safety**: Fewer runtime errors
+- **Enhanced readability**: Clear intent and structure
+
+## Future Considerations
+
+### Integration with Project Amber
+
+Records are part of the broader Project Amber initiative, which includes:
+
+- **Pattern Matching**: Enhanced with sealed classes and records
+- **Text Blocks**: Better string handling in record constructors
+- **Local Variable Type Inference**: Improved ergonomics with `var`
+
+### Ecosystem Evolution
+
+As the Java ecosystem evolves, records are becoming first-class citizens in:
+
+- **Serialization frameworks**: Jackson, Gson, etc.
+- **Validation libraries**: Bean Validation, custom validators
+- **Testing frameworks**: Better support for immutable test data
+- **Documentation tools**: Enhanced JavaDoc generation
+
+## Recommendation
+
+The adoption of records in Java 16+ projects is a recommended practice to leverage these benefits and build more efficient and robust systems. They represent not just a syntactic improvement, but a fundamental shift toward safer, more expressive, and more maintainable Java code.
+
+Records embody the principle of "doing more with less" - providing powerful functionality through simple, clear syntax while maintaining the robustness and performance characteristics that Java developers expect. They are an essential tool for modern Java development and a stepping stone toward a more functional and declarative programming paradigm.
+
+---
+Access too [[Immutability in Java with Value Objects]]
+
+References: 
+
+1. Use Records to Simplify Your Java Code | Codementor, acesso a julho 5, 2025, [https://www.codementor.io/@noelkamphoa/use-records-to-simplify-your-java-code-2j9tv56b64](https://www.codementor.io/@noelkamphoa/use-records-to-simplify-your-java-code-2j9tv56b64
+2. Records Evolution. Traditionally, Java developers used… | by Serhii Bohutskyi | Medium, acesso a julho 5, 2025, [https://bohutskyi.com/java-records-evolution-c9166b3c1b85](https://bohutskyi.com/java-records-evolution-c9166b3c1b85)
+3. Java Record - Tutorialspoint, acesso a julho 5, 2025, [https://www.tutorialspoint.com/java/java_record.htm](https://www.tutorialspoint.com/java/java_record.htm)
+4. Record Classes - Oracle Help Center, acesso a julho 5, 2025, [https://docs.oracle.com/en/java/javase/23/language/records.html](https://docs.oracle.com/en/java/javase/23/language/records.html)
+5. Records (JEP 395) - javaalmanac.io, acesso a julho 5, 2025, [https://javaalmanac.io/features/records/](https://javaalmanac.io/features/records/)
+6. Java Records vs POJO - DevOps.dev, acesso a julho 5, 2025, [https://blog.devops.dev/java-records-vs-pojo-bb7dd26f43f0](https://blog.devops.dev/java-records-vs-pojo-bb7dd26f43f0)
+7. DTO vs Record in Java: Which Should You Use? - Ashutosh Writes, acesso a julho 5, 2025, [https://blog.ashutoshkrris.in/dto-vs-record-in-java-which-should-you-use](https://blog.ashutoshkrris.in/dto-vs-record-in-java-which-should-you-use)    
+8. Record Patterns - Oracle Help Center, acesso a julho 5, 2025, [https://docs.oracle.com/en/java/javase/22/language/record-patterns.html](https://docs.oracle.com/en/java/javase/22/language/record-patterns.html)
+9. JEP Draft – Derived Record Creation (Preview) - Hacker News, acesso a julho 5, 2025, [https://news.ycombinator.com/item?id=39120932](https://news.ycombinator.com/item?id=39120932)
+10. Record (Java SE 17 & JDK 17) - Oracle Help Center, acesso a julho 5, 2025, [https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/lang/Record.html](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/lang/Record.html)
+11. Java Records: A Closer Look - DZone, acesso a julho 5, 2025, [https://dzone.com/articles/java-records-a-closer-look](https://dzone.com/articles/java-records-a-closer-look)
+12. Java Records vs Regular DTO Classes: When to Use What? | by Arvind Kumar - Medium, acesso a julho 5, 2025, [https://codefarm0.medium.com/java-records-vs-regular-dto-classes-when-to-use-what-e35bfcf9a760](https://codefarm0.medium.com/java-records-vs-regular-dto-classes-when-to-use-what-e35bfcf9a760)
+13. JEP 395 (Records) > Articles > Page #1 - InfoQ, acesso a julho 5, 2025, [https://www.infoq.com/jep395/articles/](https://www.infoq.com/jep395/articles/)
+14. JEP 395: Records - OpenJDK, acesso a julho 5, 2025, [https://openjdk.java.net/jeps/395](https://openjdk.java.net/jeps/395)
