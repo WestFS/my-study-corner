@@ -30,7 +30,7 @@ The starting point for implementing authentication with Context API is creating 
 
 ```typescript
 // src/context/AuthContext.tsx
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
 interface User {
   id: string;
@@ -357,8 +357,7 @@ Interceptors are the pillar for robust and transparent authentication, abstracti
 
 ### 3.1. Login and Logout Logic
 
-The `logi
-n` and `logout` functions are the central methods exposed by AuthContext for manipulating authentication state, implemented within the AuthProvider.
+The `login` and `logout` functions are the central methods exposed by AuthContext for manipulating authentication state, implemented within the AuthProvider.
 
 The `login` function is responsible for receiving user credentials (such as username and password) and making a call to the login API using the configured Axios instance. On success, it stores the received tokens (access and refresh tokens) and updates the `user` state in AuthContext. Typically, after successful login, the application can redirect the user to a protected route, such as a dashboard (`/dashboard`).
 
